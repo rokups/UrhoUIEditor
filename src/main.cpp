@@ -146,11 +146,61 @@ public:
         _ui->GetRoot()->SetPosition(root_pos);
 
         auto input = context_->GetInput();
-        if (input->GetMouseButtonPress(MOUSEB_LEFT))
+        if (input->GetMouseButtonPress(MOUSEB_LEFT) || input->GetMouseButtonPress(MOUSEB_RIGHT))
         {
-            _selected = _ui->GetElementAt(input->GetMousePosition(), false);
-            if (_selected == _ui->GetRoot())
-                _selected = nullptr;
+            auto clicked = _ui->GetElementAt(input->GetMousePosition(), false);
+            if (clicked)
+                _selected = clicked;
+        }
+
+        if (_selected)
+        {
+            if (input->GetKeyPress(KEY_DELETE) && _selected != _ui->GetRoot())
+                _selected->Remove();
+
+            if (ImGui::BeginPopupContextVoid("Element Context Menu", 2))
+            {
+                if (ImGui::BeginMenu("Add Child"))
+                {
+                    const char* ui_types[] = {
+                        "BorderImage",
+                        "Button",
+                        "CheckBox",
+                        "Cursor",
+                        "DropDownList",
+                        "LineEdit",
+                        "ListView",
+                        "Menu",
+                        "ProgressBar",
+                        "ScrollBar",
+                        "ScrollView",
+                        "Slider",
+                        "Sprite",
+                        "Text",
+                        "ToolTip",
+                        "UIElement",
+                        "View3D",
+                        "Window",
+                        0
+                    };
+                    for (auto i = 0; ui_types[i] != 0; i++)
+                    {
+                        if (ui::MenuItem(ui_types[i]))
+                        {
+                            _selected = _selected->CreateChild(ui_types[i]);
+                            _selected->SetStyleAuto();
+                        }
+                    }
+                    ImGui::EndMenu();
+                }
+
+                if (_selected != _ui->GetRoot())
+                {
+                    if (ImGui::Selectable("Delete Element"))
+                        _selected->Remove();
+                }
+                ImGui::EndPopup();
+            }
         }
     }
 
@@ -218,7 +268,6 @@ public:
         auto& type = element->GetTypeName();
         if (ui::TreeNodeEx(element, flags, "%s", name.Length() ? name.CString() : type.CString()))
         {
-
             auto input = context_->GetInput();
             if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
                 _selected = element;
