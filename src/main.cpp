@@ -11,6 +11,7 @@
 #include <Atomic/Graphics/Camera.h>
 #include <Atomic/Scene/Scene.h>
 #include <Atomic/Input/Input.h>
+#include <Atomic/Graphics/GraphicsEvents.h>
 
 #include <UrhoUI.h>
 #include <unordered_map>
@@ -84,6 +85,8 @@ public:
 
     void RenderSystemUI()
     {
+        _ui->Render(true);
+
         if (_selected.NotNull())
             _ui->DebugDraw(_selected);
 
@@ -118,8 +121,8 @@ public:
 
         auto window_height = (float)context_->GetGraphics()->GetHeight();
         auto window_width = (float)context_->GetGraphics()->GetWidth();
-        IntVector2 root_pos;
-        IntVector2 root_size(0, static_cast<int>(window_height));
+        IntVector2 root_pos(0, 20);
+        IntVector2 root_size(0, static_cast<int>(window_height) - 20);
         const auto panel_flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
         
         ui::SetNextWindowPos({0.f, 20.f}, ImGuiSetCond_Once);
@@ -132,8 +135,8 @@ public:
         ui::End();
         
 
-        ui::SetNextWindowPos({window_width - 500.f, 20.f}, ImGuiSetCond_Once);
-        ui::SetNextWindowSize({500.f, window_height - 20.f});
+        ui::SetNextWindowPos({window_width - 400.f, 20.f}, ImGuiSetCond_Once);
+        ui::SetNextWindowSize({400.f, window_height - 20.f});
         if (ui::Begin("AttributeList", nullptr, panel_flags))
         {
             root_size.x_ = static_cast<int>(window_width - root_pos.x_ - ui::GetWindowWidth());
@@ -224,20 +227,31 @@ public:
         if (!_current_file_path.Empty())
             cache->RemoveResourceDir(GetResourcePath(_current_file_path));
 
-        File fp(context_, file_path);
-        if (fp.IsOpen())
+        SharedPtr<XMLFile> xml(new XMLFile(context_));
+        if (xml->LoadFile(file_path))
         {
-            cache->AddResourceDir(GetResourcePath(file_path));
+            auto resource_dir = GetResourcePath(file_path);
+            if (!cache->GetResourceDirs().Contains(resource_dir))
+                cache->AddResourceDir(resource_dir);
 
-            auto child = _ui->GetRoot()->CreateChild<UIElement>();
-            if (child->LoadXML(fp))
+            if (xml->GetRoot().GetName() == "elements")
             {
-                child->SetStyleAuto();
-                _current_file_path = file_path;
+                // This is a style.
+                _ui->GetRoot()->SetDefaultStyle(xml);
                 return true;
             }
-            else
-                child->Remove();
+            else if (xml->GetRoot().GetName() == "element")
+            {
+                auto child = _ui->GetRoot()->CreateChild<UIElement>();
+                if (child->LoadXML(xml->GetRoot()))
+                {
+                    child->SetStyleAuto();
+                    _current_file_path = file_path;
+                    return true;
+                }
+                else
+                    child->Remove();
+            }
         }
 
         tinyfd_messageBox("Error", "Opening XML file failed", "ok", "error", 1);
