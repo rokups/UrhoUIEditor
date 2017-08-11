@@ -1,0 +1,6 @@
+[submodule "dep/AtomicGameEngine"]
+	path = dep/AtomicGameEngine
+	url = https://github.com/AtomicGameEngine/AtomicGameEngine
+[submodule "dep/UrhoUI"]
+	path = dep/UrhoUI
+	url = https://github.com/rokups/UrhoUI
