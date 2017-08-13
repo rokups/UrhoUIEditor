@@ -96,26 +96,27 @@ public:
             {
                 if (ui::MenuItem(ICON_FA_FOLDER_OPEN " Open"))
                 {
-                    const char* filters[] = {"*.json", "*.xml"};
-                    auto filename = tinyfd_openFileDialog("Open file", ".", 2, filters, "UI files", 0);
+                    const char* filters[] = {"*.xml"};
+                    auto filename = tinyfd_openFileDialog("Open file", ".", 2, filters, "XML files", 0);
                     if (filename)
                         LoadFile(filename);
                 }
 
-                if (ui::MenuItem(ICON_FA_FLOPPY_O " Save XML As") && _ui->GetRoot()->GetNumChildren() > 0)
+                if (ui::MenuItem(ICON_FA_FLOPPY_O " Save As") && _ui->GetRoot()->GetNumChildren() > 0)
                 {
                     const char* filters[] = {"*.xml"};
-                    if (auto path = tinyfd_saveFileDialog("Save XML", ".", 1, filters, "XML files"))
-                    {
-                        if (SaveFileXML(path))
-                            _current_file_path = path;
-                    }
+                    if (auto path = tinyfd_saveFileDialog("Save file", ".", 1, filters, "XML files"))
+                        SaveFile(path);
                 }
 
                 ui::EndMenu();
             }
+
             if (ui::Button(ICON_FA_FLOPPY_O) && !_current_file_path.Empty())
-                SaveFileXML(_current_file_path);
+                SaveFile(_current_file_path);
+            if (ui::IsItemHovered())
+                ui::SetTooltip("Save current file.");
+
             ui::EndMainMenuBar();
         }
 
@@ -227,45 +228,54 @@ public:
         if (!_current_file_path.Empty())
             cache->RemoveResourceDir(GetResourcePath(_current_file_path));
 
-        SharedPtr<XMLFile> xml(new XMLFile(context_));
-        if (xml->LoadFile(file_path))
-        {
-            auto resource_dir = GetResourcePath(file_path);
-            if (!cache->GetResourceDirs().Contains(resource_dir))
-                cache->AddResourceDir(resource_dir);
+        auto resource_dir = GetResourcePath(file_path);
+        if (!cache->GetResourceDirs().Contains(resource_dir))
+            cache->AddResourceDir(resource_dir);
 
-            if (xml->GetRoot().GetName() == "elements")
+        if (file_path.EndsWith(".xml", false))
+        {
+            SharedPtr<XMLFile> xml(new XMLFile(context_));
+            if (xml->LoadFile(file_path))
             {
-                // This is a style.
-                _ui->GetRoot()->SetDefaultStyle(xml);
-                return true;
-            }
-            else if (xml->GetRoot().GetName() == "element")
-            {
-                auto child = _ui->GetRoot()->CreateChild<UIElement>();
-                if (child->LoadXML(xml->GetRoot()))
+                if (xml->GetRoot().GetName() == "elements")
                 {
-                    child->SetStyleAuto();
-                    _current_file_path = file_path;
+                    // This is a style.
+                    _ui->GetRoot()->SetDefaultStyle(xml);
                     return true;
                 }
-                else
-                    child->Remove();
+                else if (xml->GetRoot().GetName() == "element")
+                {
+                    auto child = _ui->GetRoot()->CreateChild<UIElement>();
+                    if (child->LoadXML(xml->GetRoot()))
+                    {
+                        child->SetStyleAuto();
+                        SetCurrentFilePath(file_path);
+                        return true;
+                    }
+                    else
+                        child->Remove();
+                }
             }
         }
 
+        cache->RemoveResourceDir(resource_dir);
         tinyfd_messageBox("Error", "Opening XML file failed", "ok", "error", 1);
         return false;
     }
 
-    bool SaveFileXML(const String& file_path)
+    bool SaveFile(const String& file_path)
     {
         File saveFile(context_, file_path, FILE_WRITE);
-        if (!_ui->GetRoot()->GetChild(0)->SaveXML(saveFile))
+        if (file_path.EndsWith(".xml", false))
         {
-            tinyfd_messageBox("Error", "Saving XML file failed", "ok", "error", 1);
-            return false;
+            if (_ui->GetRoot()->GetChild(0)->SaveXML(saveFile))
+            {
+                SetCurrentFilePath(file_path);
+                return true;
+            }
         }
+
+        tinyfd_messageBox("Error", "Saving UI file failed", "ok", "error", 1);
         return true;
     }
 
@@ -613,6 +623,12 @@ public:
         }
         ui::PopID();
         ui::Columns(1);
+    }
+
+    void SetCurrentFilePath(const String& file_path)
+    {
+        _current_file_path = file_path;
+        context_->GetGraphics()->SetWindowTitle("UrhoUIEditor - " + _current_file_path);
     }
 };
 
