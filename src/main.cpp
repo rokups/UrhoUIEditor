@@ -352,21 +352,6 @@ public:
             if (info.accessor_.Null() || info.mode_ & AM_NOEDIT)
                 continue;
 
-            ui::PushID(info.name_.CString());
-
-            ui::TextUnformatted(info.name_.CString());
-            ui::NextColumn();
-
-            if (ui::Button(ICON_FA_UNDO))
-            {
-                info.accessor_->Set(item, info.defaultValue_);
-                item->ApplyAttributes();
-                _undo.TrackValue(item, info.name_, info.defaultValue_);
-            }
-            if (ui::IsItemActive())
-                ui::SetTooltip("Set default value.");
-            ui::SameLine();
-
             Variant value, old_value;
             info.accessor_->Get(item, value);
             old_value = Variant(value);
@@ -451,6 +436,21 @@ public:
                 combo_values = values;
                 combo_values_num = SDL_arraysize(values);
             }
+
+            ui::PushID(info.name_.CString());
+            ui::TextUnformatted(info.name_.CString());
+            ui::NextColumn();
+
+            if (ui::Button(ICON_FA_UNDO))
+            {
+                _undo.TrackValue(item, info.name_, value);
+                info.accessor_->Set(item, info.defaultValue_);
+                item->ApplyAttributes();
+                _undo.TrackValue(item, info.name_, info.defaultValue_);
+            }
+            if (ui::IsItemActive())
+                ui::SetTooltip("Set default value.");
+            ui::SameLine();
 
             if (combo_values)
             {
