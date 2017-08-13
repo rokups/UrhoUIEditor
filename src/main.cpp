@@ -121,6 +121,19 @@ public:
                 SaveFile(_current_file_path);
             if (ui::IsItemHovered())
                 ui::SetTooltip("Save current file.");
+            ImGui::SameLine();
+
+            if (ui::Button(ICON_FA_UNDO))
+                _undo.Undo();
+            if (ui::IsItemHovered())
+                ui::SetTooltip("Undo.");
+            ImGui::SameLine();
+
+            if (ui::Button(ICON_FA_REPEAT))
+                _undo.Redo();
+            if (ui::IsItemHovered())
+                ui::SetTooltip("Redo.");
+            ImGui::SameLine();
 
             ui::EndMainMenuBar();
         }
@@ -523,8 +536,27 @@ public:
                     ui::Text("%p", value.GetVoidPtr());
                     break;
                 case VAR_RESOURCEREF:
-                    ui::Text("%s", value.GetResourceRef().name_.CString());
+                {
+                    auto ref = value.GetResourceRef();
+                    ui::Text("%s", ref.name_.CString());
+                    ui::SameLine();
+                    if (ui::Button(ICON_FA_FOLDER_OPEN))
+                    {
+                        auto cache = GetSubsystem<ResourceCache>();
+                        auto file_name = cache->GetResourceFileName(ref.name_);
+                        String selected_path = tinyfd_openFileDialog(
+                            ToString("Open %s File", cache->GetResource(ref.type_, ref.name_)->GetTypeName().CString()).CString(),
+                            file_name.CString(), 0, 0, 0, 0);
+                        SharedPtr<Resource> resource(cache->GetResource(ref.type_, selected_path));
+                        if (resource.NotNull())
+                        {
+                            ref.name_ = resource->GetName();
+                            value = ref;
+                            modified = true;
+                        }
+                    }
                     break;
+                }
 //            case VAR_RESOURCEREFLIST:
 //            case VAR_VARIANTVECTOR:
 //            case VAR_VARIANTMAP:
