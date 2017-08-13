@@ -165,7 +165,11 @@ public:
         if (_selected)
         {
             if (input->GetKeyPress(KEY_DELETE) && _selected != _ui->GetRoot())
+            {
+                _undo.TrackRemoval(_selected);
                 _selected->Remove();
+                _selected = nullptr;
+            }
 
             if (ImGui::BeginPopupContextVoid("Element Context Menu", 2))
             {
@@ -198,6 +202,7 @@ public:
                         {
                             _selected = _selected->CreateChild(ui_types[i]);
                             _selected->SetStyleAuto();
+                            _undo.TrackAddition(_selected);
                         }
                     }
                     ImGui::EndMenu();
@@ -206,7 +211,11 @@ public:
                 if (_selected != _ui->GetRoot())
                 {
                     if (ImGui::Selectable("Delete Element"))
+                    {
+                        _undo.TrackRemoval(_selected);
                         _selected->Remove();
+                        _selected = nullptr;
+                    }
                 }
                 ImGui::EndPopup();
             }
