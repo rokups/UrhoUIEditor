@@ -11,12 +11,14 @@
 #include <Atomic/Graphics/Camera.h>
 #include <Atomic/Scene/Scene.h>
 #include <Atomic/Input/Input.h>
+#include <Atomic/IO/Log.h>
 #include <Atomic/Graphics/GraphicsEvents.h>
 
 #include <UrhoUI.h>
 #include <unordered_map>
 #include <tinyfiledialogs.h>
 #include "IconsFontAwesome.h"
+#include "UndoManager.hpp"
 
 
 using namespace std::placeholders;
@@ -33,9 +35,11 @@ public:
     WeakPtr<UrhoUI::UI> _ui;
     WeakPtr<UIElement> _selected;
     HashMap<String, std::array<char, 0x1000>> _buffers;
+    UndoManager _undo;
     String _current_file_path;
+    bool _is_editing_value = false;
 
-    explicit UIEditorApplication(Context* ctx) : Application(ctx)
+    explicit UIEditorApplication(Context* ctx) : Application(ctx), _undo(ctx)
     {
     }
 
@@ -48,6 +52,7 @@ public:
         engineParameters_[EP_FULL_SCREEN] = false;
         engineParameters_[EP_WINDOW_HEIGHT] = 1080;
         engineParameters_[EP_WINDOW_WIDTH] = 1920;
+        engineParameters_[EP_LOG_LEVEL] = LOG_DEBUG;
     }
 
     void Start() override
@@ -206,6 +211,17 @@ public:
                 ImGui::EndPopup();
             }
         }
+
+        if (!ui::IsAnyItemActive())
+        {
+            if (input->GetKeyDown(KEY_CTRL))
+            {
+                if (input->GetKeyPress(KEY_Y) || (input->GetKeyDown(KEY_SHIFT) && input->GetKeyPress(KEY_Z)))
+                    _undo.Redo();
+                else if (input->GetKeyPress(KEY_Z))
+                    _undo.Undo();
+            }
+        }
     }
 
     void OnFileDrop(VariantMap& args)
@@ -320,11 +336,19 @@ public:
             ui::NextColumn();
 
             if (ui::Button(ICON_FA_UNDO))
+            {
                 info.accessor_->Set(item, info.defaultValue_);
+                item->ApplyAttributes();
+                _undo.TrackValue(item, info.name_, info.defaultValue_);
+            }
+            if (ui::IsItemActive())
+                ui::SetTooltip("Set default value.");
             ui::SameLine();
 
-            Variant value;
+            Variant value, old_value;
             info.accessor_->Get(item, value);
+            old_value = Variant(value);
+
             bool modified = false;
 
             const int int_min = M_MIN_INT;
@@ -546,6 +570,7 @@ public:
                 }
                 case VAR_STRINGVECTOR:
                 {
+                    // TODO: fix this
                     auto index = 0;
                     auto& v = const_cast<StringVector&>(value.GetStringVector());
                     auto& buffer = _buffers[info.name_];
@@ -612,14 +637,26 @@ public:
                     break;
                 }
             }
-            ui::PopID();
-            ui::NextColumn();
 
             if (modified)
             {
+                if (!_is_editing_value)
+                {
+                    _is_editing_value = true;
+                    _undo.TrackValue(item, info.name_, old_value);
+                }
                 info.accessor_->Set(item, value);
                 item->ApplyAttributes();
             }
+
+            if (_is_editing_value && !ui::IsAnyItemActive())
+            {
+                _undo.TrackValue(item, info.name_, value);
+                _is_editing_value = false;
+            }
+
+            ui::PopID();
+            ui::NextColumn();
         }
         ui::PopID();
         ui::Columns(1);

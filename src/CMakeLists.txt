@@ -7,7 +7,7 @@ macro(symlink source destination)
     endif ()
 endmacro()
 
-file(GLOB_RECURSE SOURCE_FILES *.cpp *.h)
+file(GLOB_RECURSE SOURCE_FILES *.cpp *.h *.hpp)
 add_executable(UIEditor ${SOURCE_FILES})
 target_link_libraries(UIEditor Atomic UrhoUI tinyfiledialogs)
 
