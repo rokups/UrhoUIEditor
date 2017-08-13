@@ -38,6 +38,9 @@ public:
     UndoManager _undo;
     String _current_file_path;
     bool _is_editing_value = false;
+    bool _show_internal = false;
+    bool _clear_buffers = true;
+    std::array<char, 0x100> _filter;
 
     explicit UIEditorApplication(Context* ctx) : Application(ctx), _undo(ctx)
     {
@@ -124,15 +127,24 @@ public:
             ImGui::SameLine();
 
             if (ui::Button(ICON_FA_UNDO))
+            {
                 _undo.Undo();
+                _clear_buffers = true;
+            }
             if (ui::IsItemHovered())
                 ui::SetTooltip("Undo.");
             ImGui::SameLine();
 
             if (ui::Button(ICON_FA_REPEAT))
+            {
                 _undo.Redo();
+                _clear_buffers = true;
+            }
             if (ui::IsItemHovered())
                 ui::SetTooltip("Redo.");
+            ImGui::SameLine();
+
+            ui::Checkbox("Show Internal", &_show_internal);
             ImGui::SameLine();
 
             ui::EndMainMenuBar();
@@ -172,7 +184,7 @@ public:
         {
             auto clicked = _ui->GetElementAt(input->GetMousePosition(), false);
             if (clicked)
-                _selected = clicked;
+                SelectItem(clicked);
         }
 
         if (_selected)
@@ -181,7 +193,7 @@ public:
             {
                 _undo.TrackRemoval(_selected);
                 _selected->Remove();
-                _selected = nullptr;
+                SelectItem(nullptr);
             }
 
             if (ImGui::BeginPopupContextVoid("Element Context Menu", 2))
@@ -213,7 +225,7 @@ public:
                     {
                         if (ui::MenuItem(ui_types[i]))
                         {
-                            _selected = _selected->CreateChild(ui_types[i]);
+                            SelectItem(_selected->CreateChild(ui_types[i]));
                             _selected->SetStyleAuto();
                             _undo.TrackAddition(_selected);
                         }
@@ -227,21 +239,28 @@ public:
                     {
                         _undo.TrackRemoval(_selected);
                         _selected->Remove();
-                        _selected = nullptr;
+                        SelectItem(nullptr);
                     }
                 }
                 ImGui::EndPopup();
             }
         }
 
+        _clear_buffers = false;
         if (!ui::IsAnyItemActive())
         {
             if (input->GetKeyDown(KEY_CTRL))
             {
                 if (input->GetKeyPress(KEY_Y) || (input->GetKeyDown(KEY_SHIFT) && input->GetKeyPress(KEY_Z)))
+                {
                     _undo.Redo();
+                    _clear_buffers = true;
+                }
                 else if (input->GetKeyPress(KEY_Z))
+                {
                     _undo.Undo();
+                    _clear_buffers = true;
+                }
             }
         }
     }
@@ -319,42 +338,62 @@ public:
 
     void RenderUITree(UIElement* element)
     {
+        auto& name = element->GetName();
+        auto& type = element->GetTypeName();
+        auto tooltip = "Type: " + type;
         ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
-        if (!element->IsInternal())
+        bool is_internal = element->IsInternal();
+        if (is_internal && !_show_internal)
+            return;
+        else
             flags |= ImGuiTreeNodeFlags_DefaultOpen;
+
+        if (_show_internal)
+            tooltip += String("\nInternal: ") + (is_internal ? "true" : "false");
 
         if (element == _selected)
             flags |= ImGuiTreeNodeFlags_Selected;
 
-        auto& name = element->GetName();
-        auto& type = element->GetTypeName();
         if (ui::TreeNodeEx(element, flags, "%s", name.Length() ? name.CString() : type.CString()))
         {
-            auto input = context_->GetInput();
+            if (ui::IsItemHovered())
+                ui::SetTooltip(tooltip.CString());
+
             if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
-                _selected = element;
+                SelectItem(element);
 
             for (auto child: element->GetChildren())
                 RenderUITree(child);
             ui::TreePop();
         }
-        if (ui::IsItemHovered())
-            ui::SetTooltip("Type: %s\nInternal: %s", type.CString(), element->IsInternal() ? "true" : "false");
     }
 
     void RenderAttributes(Serializable* item)
     {
         ui::Columns(2);
+
+        ui::TextUnformatted("Filter");
+        ui::NextColumn();
+        if (ui::Button(ICON_FA_UNDO))
+            _filter.front() = 0;
+        if (ui::IsItemHovered())
+            ui::SetTooltip("Reset filter.");
+        ui::SameLine();
+        ui::InputText("", &_filter.front(), _filter.size() - 1);
+        ui::NextColumn();
+
         ui::PushID(item);
         const auto& attributes = *item->GetAttributes();
         for (const AttributeInfo& info: attributes)
         {
-            if (info.accessor_.Null() || info.mode_ & AM_NOEDIT)
+            if (info.mode_ & AM_NOEDIT)
+                continue;
+
+            if (_filter.front() && !info.name_.Contains(&_filter.front(), false))
                 continue;
 
             Variant value, old_value;
-            info.accessor_->Get(item, value);
-            old_value = Variant(value);
+            value = old_value = item->GetAttribute(info.name_);
 
             bool modified = false;
 
@@ -444,7 +483,7 @@ public:
             if (ui::Button(ICON_FA_UNDO))
             {
                 _undo.TrackValue(item, info.name_, value);
-                info.accessor_->Set(item, info.defaultValue_);
+                item->SetAttribute(info.name_, info.defaultValue_);
                 item->ApplyAttributes();
                 _undo.TrackValue(item, info.name_, info.defaultValue_);
             }
@@ -524,11 +563,10 @@ public:
                 case VAR_STRING:
                 {
                     auto& v = const_cast<String&>(value.GetString());
-                    char buf[1024];
-                    strcpy(buf, v.CString());
-                    modified |= ui::InputText("", buf, sizeof(buf) - 1);
+                    auto& buffer = GetBuffer(info.name_, value.GetString());
+                    modified |= ui::InputText("", &buffer.front(), buffer.size() - 1);
                     if (modified)
-                        value = buf;
+                        value = &buffer.front();
                     break;
                 }
 //            case VAR_BUFFER:
@@ -611,41 +649,49 @@ public:
                 }
                 case VAR_STRINGVECTOR:
                 {
-                    // TODO: fix this
                     auto index = 0;
                     auto& v = const_cast<StringVector&>(value.GetStringVector());
-                    auto& buffer = _buffers[info.name_];
-                    ui::PushID(index++);
-                    if (ui::InputText("", &buffer.front(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue))
-                    {
-                        v.Push(&buffer.front());
-                        buffer.front() = 0;
-                        modified = true;
-                    }
-                    ui::PopID();
 
+                    // Insert new item.
+                    {
+                        auto& buffer = GetBuffer(info.name_, "");
+                        ui::PushID(index++);
+                        if (ui::InputText("", &buffer.front(), buffer.size() - 1, ImGuiInputTextFlags_EnterReturnsTrue))
+                        {
+                            v.Push(&buffer.front());
+                            buffer.front() = 0;
+                            modified = true;
+                        }
+                        ui::PopID();
+                    }
+
+                    // List of current items.
                     for (String& sv: v)
                     {
+                        auto buffer_name = ToString("%s-%d", info.name_.CString(), index);
+                        if (_clear_buffers)
+                            RemoveBuffer(buffer_name);
+                        auto& buffer = GetBuffer(buffer_name, sv);
                         ui::PushID(index++);
                         if (ui::Button(ICON_FA_TRASH))
                         {
+                            RemoveBuffer(buffer_name);
                             v.Remove(sv);
                             modified = true;
-                        }
-                        if (modified)
-                        {
                             ui::PopID();
                             break;
                         }
                         ui::SameLine();
 
-                        if (sv.Capacity() - 2 < sv.Length())
-                            sv.Reserve(sv.Length() + 2);
-                        modified |= ui::InputText("", const_cast<char*>(sv.CString()), sv.Capacity());
+                        modified |= ui::InputText("", &buffer.front(), buffer.size() - 1, ImGuiInputTextFlags_EnterReturnsTrue);
                         if (modified)
-                            sv.Resize(strlen(sv.CString()));
+                            sv = &buffer.front();
                         ui::PopID();
                     }
+
+                    if (modified)
+                        value = StringVector(v);
+
                     break;
                 }
                 case VAR_RECT:
@@ -686,7 +732,7 @@ public:
                     _is_editing_value = true;
                     _undo.TrackValue(item, info.name_, old_value);
                 }
-                info.accessor_->Set(item, value);
+                item->SetAttribute(info.name_, value);
                 item->ApplyAttributes();
             }
 
@@ -707,6 +753,30 @@ public:
     {
         _current_file_path = file_path;
         context_->GetGraphics()->SetWindowTitle("UrhoUIEditor - " + _current_file_path);
+    }
+
+    void SelectItem(UIElement* current)
+    {
+        _buffers.Clear();
+        _selected = current;
+    }
+
+    std::array<char, 0x1000>& GetBuffer(const String& name, const String& default_value)
+    {
+        auto it = _buffers.Find(name);
+        if (it == _buffers.End())
+        {
+            auto& buffer = _buffers[name];
+            strncpy(&buffer[0], default_value.CString(), buffer.size() - 1);
+            return buffer;
+        }
+        else
+            return it->second_;
+    }
+
+    void RemoveBuffer(const String& name)
+    {
+        _buffers.Erase(name);
     }
 };
 

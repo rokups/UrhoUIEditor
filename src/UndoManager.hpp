@@ -76,39 +76,25 @@ public:
 
     void TrackValue(Serializable* item, const String& name, const Variant& value)
     {
-        switch (value.GetType())
+        if (_index >= 0 && _index < _stack.Size() && _stack.Size() > 0)
         {
-        case VAR_PTR:
-        case VAR_VOIDPTR:
-        case VAR_BUFFER:
-        case VAR_VARIANTMAP:
-        case VAR_STRINGVECTOR:
-            context_->GetLog()->Write(LOG_DEBUG, ToString("TODO: implement undo for %s", value.GetTypeName().CString()));
-            return;
-        default:
-        {
-            if (_index >= 0 && _index < _stack.Size() && _stack.Size() > 0)
+            if (_stack[_index].attribute_value == value)
             {
-                if (_stack[_index].attribute_value == value)
-                {
-                    context_->GetLog()->Write(LOG_DEBUG, "UNDO: Same value is already at the top of undo stack. Ignore.");
-                    return;
-                }
+                context_->GetLog()->Write(LOG_DEBUG, "UNDO: Same value is already at the top of undo stack. Ignore.");
+                return;
             }
-            UndoState state;
-            state.item = item;
-            if (state.item.NotNull())
-            {
-                state.type = UndoState::ATTRIBUTE_CHANGED;
-                state.attribute_name = name;
-                state.attribute_value = value;
-                _stack.Resize(++_index);
-                _stack.Push(state);
-                context_->GetLog()->Write(LOG_DEBUG, ToString("UNDO: Save %d %s = %s", _index, name.CString(),
-                                                              value.ToString().CString()));
-            }
-            break;
         }
+        UndoState state;
+        state.item = item;
+        if (state.item.NotNull())
+        {
+            state.type = UndoState::ATTRIBUTE_CHANGED;
+            state.attribute_name = name;
+            state.attribute_value = value;
+            _stack.Resize(++_index);
+            _stack.Push(state);
+            context_->GetLog()->Write(LOG_DEBUG, ToString("UNDO: Save %d %s = %s", _index, name.CString(),
+                                                          value.ToString().CString()));
         }
     }
 
@@ -142,12 +128,25 @@ public:
             }
             break;
         case UndoState::ATTRIBUTE_CHANGED:
+        {
+            String repr;
+
+            switch (state.attribute_value.GetType())
+            {
+            case VAR_STRINGVECTOR:
+                for (auto val: state.attribute_value.GetStringVector())
+                    repr += val + ";";
+                break;
+            default:
+                repr = state.attribute_value.ToString();
+            }
+
             state.item->SetAttribute(state.attribute_name, state.attribute_value);
             state.item->ApplyAttributes();
             context_->GetLog()->Write(LOG_DEBUG, ToString("UNDO: Set state %d %s = %s",
-                                                          _index, state.attribute_name.CString(),
-                                                          state.attribute_value.ToString().CString()));
+                                                          _index, state.attribute_name.CString(), repr.CString()));
             break;
+        }
         default:
             break;
         }
