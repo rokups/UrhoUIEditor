@@ -413,11 +413,16 @@ public:
                 }
                 else if (xml->GetRoot().GetName() == "element")
                 {
+                    Vector<SharedPtr<UIElement>> children = _ui->GetRoot()->GetChildren();
                     auto child = _ui->GetRoot()->CreateChild<UIElement>();
                     if (child->LoadXML(xml->GetRoot()))
                     {
                         child->SetStyleAuto();
                         SetCurrentFilePath(file_path);
+
+                        for (auto old_child : children)
+                            old_child->Remove();
+
                         return true;
                     }
                     else
