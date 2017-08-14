@@ -9,10 +9,12 @@
 #include <Atomic/Graphics/Zone.h>
 #include <Atomic/Graphics/Renderer.h>
 #include <Atomic/Graphics/Camera.h>
+#include <Atomic/Graphics/DebugRenderer.h>
 #include <Atomic/Scene/Scene.h>
 #include <Atomic/Input/Input.h>
 #include <Atomic/IO/Log.h>
 #include <Atomic/Graphics/GraphicsEvents.h>
+#include <Atomic/Core/CoreEvents.h>
 
 #include <UrhoUI.h>
 #include <unordered_map>
@@ -27,6 +29,21 @@ using namespace Atomic::UrhoUI;
 namespace ui=ImGui;
 
 
+enum ResizeType
+{
+    RESIZE_NONE = 0,
+    RESIZE_LEFT = 1,
+    RESIZE_RIGHT = 2,
+    RESIZE_TOP = 4,
+    RESIZE_BOTTOM = 8,
+    RESIZE_MOVE = 16,
+};
+
+inline ResizeType operator|(ResizeType a, ResizeType b)
+{
+    return static_cast<ResizeType>(static_cast<int>(a) | static_cast<int>(b));
+}
+
 class UIEditorApplication : public Application
 {
     ATOMIC_OBJECT(UIEditorApplication, Application);
@@ -34,12 +51,15 @@ public:
     SharedPtr<Scene> _scene;
     WeakPtr<UrhoUI::UI> _ui;
     WeakPtr<UIElement> _selected;
+    WeakPtr<DebugRenderer> _debug;
+    WeakPtr<Camera> _camera;
     HashMap<String, std::array<char, 0x1000>> _buffers;
     UndoManager _undo;
     String _current_file_path;
     bool _is_editing_value = false;
     bool _show_internal = false;
     bool _clear_buffers = true;
+    ResizeType _resizing = RESIZE_NONE;
     std::array<char, 0x100> _filter;
 
     explicit UIEditorApplication(Context* ctx) : Application(ctx), _undo(ctx)
@@ -71,14 +91,21 @@ public:
         // Background color
         _scene = new Scene(context_);
         _scene->CreateComponent<Octree>();
+        _debug = _scene->CreateComponent<DebugRenderer>();
         auto zone = _scene->CreateComponent<Zone>();
         zone->SetBoundingBox(BoundingBox(-1000.0f, 1000.0f));
         zone->SetFogColor(Color(0.1f, 0.1f, 0.1f));
         zone->SetFogStart(100.0f);
         zone->SetFogEnd(300.0f);
-        GetSubsystem<Renderer>()->SetViewport(0, new Viewport(context_, _scene, _scene->CreateChild("Camera")->CreateComponent<Camera>()));
+        _camera = _scene->CreateChild("Camera")->CreateComponent<Camera>();
+        _camera->SetOrthographic(true);
+        _camera->GetNode()->SetPosition({0, 10, 0});
+        _camera->GetNode()->LookAt({0, 0, 0});
+        _debug->SetView(_camera);
+        GetSubsystem<Renderer>()->SetViewport(0, new Viewport(context_, _scene, _camera));
 
         // Events
+        SubscribeToEvent(E_UPDATE, std::bind(&UIEditorApplication::OnUpdate, this, _2));
         SubscribeToEvent(E_SYSTEMUIFRAME, std::bind(&UIEditorApplication::RenderSystemUI, this));
         SubscribeToEvent(E_DROPFILE, std::bind(&UIEditorApplication::OnFileDrop, this, _2));
 
@@ -89,6 +116,104 @@ public:
 
     void Stop() override
     {
+    }
+
+    Vector3 ScreenToWorld(IntVector2 screen_pos)
+    {
+        auto renderer = GetSubsystem<Renderer>();
+        return renderer->GetViewport(0)->GetScreenRay(screen_pos.x_, screen_pos.y_).origin_;
+    }
+
+    bool RenderHandle(IntVector2 pos)
+    {
+        auto wh = 10;
+        IntRect rect(
+            pos.x_ - wh / 2,
+            pos.y_ - wh / 2,
+            pos.x_ + wh / 2,
+            pos.y_ + wh / 2
+        );
+
+        auto a = ScreenToWorld({rect.left_, rect.top_});
+        auto b = ScreenToWorld({rect.right_, rect.top_});
+        auto c = ScreenToWorld({rect.right_, rect.bottom_});
+        auto d = ScreenToWorld({rect.left_, rect.bottom_});
+        _debug->AddTriangle(a, b, c, Color::RED, false);
+        _debug->AddTriangle(a, c, d, Color::RED, false);
+
+        auto input = context_->GetInput();
+        if (input->GetMouseButtonDown(MOUSEB_LEFT))
+            return rect.IsInside(input->GetMousePosition()) == INSIDE;
+        return false;
+    }
+
+    void OnUpdate(VariantMap& args)
+    {
+        if (_selected.Null())
+            return;
+
+        auto pos = _selected->GetScreenPosition();
+        auto size = _selected->GetSize();
+        auto input = context_->GetInput();
+
+        bool was_not_moving = _resizing == RESIZE_NONE;
+
+        if (RenderHandle(pos) && was_not_moving)
+            _resizing = RESIZE_LEFT | RESIZE_TOP;
+        if (RenderHandle(pos + IntVector2(0, size.y_ / 2)) && was_not_moving)
+            _resizing = RESIZE_LEFT;
+        if (RenderHandle(pos + IntVector2(0, size.y_)) && was_not_moving)
+            _resizing = RESIZE_LEFT | RESIZE_BOTTOM;
+        if (RenderHandle(pos + IntVector2(size.x_ / 2, 0)) && was_not_moving)
+            _resizing = RESIZE_TOP;
+        if (RenderHandle(pos + IntVector2(size.x_, 0)) && was_not_moving)
+            _resizing = RESIZE_TOP | RESIZE_RIGHT;
+        if (RenderHandle(pos + IntVector2(size.x_, size.y_ / 2)) && was_not_moving)
+            _resizing = RESIZE_RIGHT;
+        if (RenderHandle(pos + IntVector2(size.x_, size.y_)) && was_not_moving)
+            _resizing = RESIZE_BOTTOM | RESIZE_RIGHT;
+        if (RenderHandle(pos + IntVector2(size.x_ / 2, size.y_)) && was_not_moving)
+            _resizing = RESIZE_BOTTOM;
+        if (RenderHandle(pos + size / 2) && was_not_moving)
+            _resizing = RESIZE_MOVE;
+
+        if (was_not_moving && _resizing != RESIZE_NONE)
+            _undo.TrackValue(_selected, {{"Position", _selected->GetPosition()}, {"Size", _selected->GetSize()}});
+
+        if (_resizing != RESIZE_NONE && !input->GetMouseButtonDown(MOUSEB_LEFT))
+        {
+            _undo.TrackValue(_selected, {{"Position", _selected->GetPosition()}, {"Size", _selected->GetSize()}});
+            _resizing = RESIZE_NONE;
+        }
+
+        auto d = input->GetMouseMove();
+        if (_resizing != RESIZE_NONE && d != IntVector2::ZERO)
+        {
+            pos = _selected->GetPosition();
+            if (_resizing & RESIZE_MOVE)
+                pos += d;
+            else
+            {
+                if (_resizing & RESIZE_LEFT)
+                {
+                    pos += IntVector2(d.x_, 0);
+                    size -= IntVector2(d.x_, 0);
+                }
+                else if (_resizing & RESIZE_RIGHT)
+                    size += IntVector2(d.x_, 0);
+
+                if (_resizing & RESIZE_TOP)
+                {
+                    pos += IntVector2(0, d.y_);
+                    size -= IntVector2(0, d.y_);
+                }
+                else if (_resizing & RESIZE_BOTTOM)
+                    size += IntVector2(0, d.y_);
+            }
+
+            _selected->SetPosition(pos);
+            _selected->SetSize(size);
+        }
     }
 
     void RenderSystemUI()
@@ -583,8 +708,8 @@ public:
                         auto cache = GetSubsystem<ResourceCache>();
                         auto file_name = cache->GetResourceFileName(ref.name_);
                         String selected_path = tinyfd_openFileDialog(
-                            ToString("Open %s File", cache->GetResource(ref.type_, ref.name_)->GetTypeName().CString()).CString(),
-                            file_name.CString(), 0, 0, 0, 0);
+                            ToString("Open %s File", context_->GetTypeName(ref.type_).CString()).CString(),
+                            file_name.Length() ? file_name.CString() : _current_file_path.CString(), 0, 0, 0, 0);
                         SharedPtr<Resource> resource(cache->GetResource(ref.type_, selected_path));
                         if (resource.NotNull())
                         {
@@ -757,6 +882,9 @@ public:
 
     void SelectItem(UIElement* current)
     {
+        if (_resizing)
+            return;
+
         _buffers.Clear();
         _selected = current;
     }
