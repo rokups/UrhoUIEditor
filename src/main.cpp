@@ -249,7 +249,7 @@ public:
                 SaveFile(_current_file_path);
             if (ui::IsItemHovered())
                 ui::SetTooltip("Save current file.");
-            ImGui::SameLine();
+            ui::SameLine();
 
             if (ui::Button(ICON_FA_UNDO))
             {
@@ -258,7 +258,7 @@ public:
             }
             if (ui::IsItemHovered())
                 ui::SetTooltip("Undo.");
-            ImGui::SameLine();
+            ui::SameLine();
 
             if (ui::Button(ICON_FA_REPEAT))
             {
@@ -267,10 +267,10 @@ public:
             }
             if (ui::IsItemHovered())
                 ui::SetTooltip("Redo.");
-            ImGui::SameLine();
+            ui::SameLine();
 
             ui::Checkbox("Show Internal", &_show_internal);
-            ImGui::SameLine();
+            ui::SameLine();
 
             ui::EndMainMenuBar();
         }
@@ -321,30 +321,13 @@ public:
                 SelectItem(nullptr);
             }
 
-            if (ImGui::BeginPopupContextVoid("Element Context Menu", 2))
+            if (ui::BeginPopupContextVoid("Element Context Menu", 2))
             {
-                if (ImGui::BeginMenu("Add Child"))
+                if (ui::BeginMenu("Add Child"))
                 {
-                    const char* ui_types[] = {
-                        "BorderImage",
-                        "Button",
-                        "CheckBox",
-                        "Cursor",
-                        "DropDownList",
-                        "LineEdit",
-                        "ListView",
-                        "Menu",
-                        "ProgressBar",
-                        "ScrollBar",
-                        "ScrollView",
-                        "Slider",
-                        "Sprite",
-                        "Text",
-                        "ToolTip",
-                        "UIElement",
-                        "View3D",
-                        "Window",
-                        0
+                    const char* ui_types[] = {"BorderImage", "Button", "CheckBox", "Cursor", "DropDownList", "LineEdit",
+                        "ListView", "Menu", "ProgressBar", "ScrollBar", "ScrollView", "Slider", "Sprite", "Text",
+                        "ToolTip", "UIElement", "View3D", "Window", 0
                     };
                     for (auto i = 0; ui_types[i] != 0; i++)
                     {
@@ -355,19 +338,22 @@ public:
                             _undo.TrackAddition(_selected);
                         }
                     }
-                    ImGui::EndMenu();
+                    ui::EndMenu();
                 }
 
                 if (_selected != _ui->GetRoot())
                 {
-                    if (ImGui::Selectable("Delete Element"))
+                    if (ui::MenuItem("Delete Element"))
                     {
                         _undo.TrackRemoval(_selected);
                         _selected->Remove();
                         SelectItem(nullptr);
                     }
+
+                    if (ui::MenuItem("Bring To Front"))
+                        _selected->BringToFront();
                 }
-                ImGui::EndPopup();
+                ui::EndPopup();
             }
         }
 
@@ -484,7 +470,7 @@ public:
             if (ui::IsItemHovered())
                 ui::SetTooltip(tooltip.CString());
 
-            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
+            if (ui::IsItemHovered() && ui::IsMouseClicked(0))
                 SelectItem(element);
 
             for (auto child: element->GetChildren())
