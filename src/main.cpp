@@ -18,6 +18,7 @@
 
 #include <UrhoUI.h>
 #include <unordered_map>
+#include <array>
 #include <tinyfiledialogs.h>
 #include "IconsFontAwesome.h"
 #include "UndoManager.hpp"
@@ -44,6 +45,11 @@ inline ResizeType operator|(ResizeType a, ResizeType b)
     return static_cast<ResizeType>(static_cast<int>(a) | static_cast<int>(b));
 }
 
+inline ImVec4 ToImGui(const Color& color)
+{
+    return ImVec4(color.r_, color.g_, color.b_, color.a_);
+}
+
 class UIEditorApplication : public Application
 {
     ATOMIC_OBJECT(UIEditorApplication, Application);
@@ -61,6 +67,8 @@ public:
     bool _clear_buffers = true;
     ResizeType _resizing = RESIZE_NONE;
     std::array<char, 0x100> _filter;
+    XMLElement _styleXml;
+    Vector<String> _styleNames;
 
     explicit UIEditorApplication(Context* ctx) : Application(ctx), _undo(ctx)
     {
@@ -110,8 +118,8 @@ public:
         SubscribeToEvent(E_DROPFILE, std::bind(&UIEditorApplication::OnFileDrop, this, _2));
 
         // Arguments
-        if (GetArguments().Size() > 0)
-            LoadFile(GetArguments().At(0));
+        for (auto arg: GetArguments())
+            LoadFile(arg);
     }
 
     void Stop() override
@@ -149,7 +157,7 @@ public:
 
     void OnUpdate(VariantMap& args)
     {
-        if (_selected.Null())
+        if (_selected.Null() || _selected == _ui->GetRoot())
             return;
 
         auto pos = _selected->GetScreenPosition();
@@ -409,6 +417,16 @@ public:
                 {
                     // This is a style.
                     _ui->GetRoot()->SetDefaultStyle(xml);
+                    _styleXml = xml->GetRoot();
+
+                    auto styles = _styleXml.SelectPrepared(XPathQuery("/elements/element"));
+                    for (auto i = 0; i < styles.Size(); i++)
+                    {
+                        auto type = styles[i].GetAttribute("type");
+                        if (type.Length() && !_styleNames.Contains(type))
+                            _styleNames.Push(type);
+                    }
+                    Sort(_styleNames.Begin(), _styleNames.End());
                     return true;
                 }
                 else if (xml->GetRoot().GetName() == "element")
@@ -495,7 +513,34 @@ public:
         if (ui::IsItemHovered())
             ui::SetTooltip("Reset filter.");
         ui::SameLine();
+        ui::PushID("FilterEdit");
         ui::InputText("", &_filter.front(), _filter.size() - 1);
+        ui::PopID();
+        ui::NextColumn();
+
+        ui::TextUnformatted("Style");
+        ui::NextColumn();
+
+        auto applied_style = _selected->GetAppliedStyle();
+        if (applied_style.Empty())
+            applied_style = _selected->GetTypeName();
+
+        PODVector<const char*> combos;
+        combos.Reserve(_styleNames.Size() + 1);
+        int current_style_index = 0;
+        combos.Push("none");
+        for (auto i = 0; i < _styleNames.Size(); i++)
+        {
+            combos.Push(_styleNames[i].CString());
+            if (_styleNames[i] == applied_style)
+                current_style_index = i + 1;
+        }
+        if (ui::Combo("", &current_style_index, &combos.Front(), combos.Size()))
+            _selected->SetStyle(combos[current_style_index]);
+
+        if (ui::IsItemHovered())
+            ui::SetTooltip(ICON_FA_EXCLAMATION_TRIANGLE " This is a destructive operation. Changing style overwrites element attributes! " ICON_FA_EXCLAMATION_TRIANGLE);
+
         ui::NextColumn();
 
         ui::PushID(item);
@@ -593,18 +638,78 @@ public:
             }
 
             ui::PushID(info.name_.CString());
-            ui::TextUnformatted(info.name_.CString());
+            const char* from_style = "";
+            XPathQuery q("/elements/element[@type=$typeName]/attribute[@name=$name]", "typeName:String,name:String");
+            q.SetVariable("typeName", applied_style);
+            q.SetVariable("name", info.name_);
+            auto style_value = _styleXml.SelectSinglePrepared(q);
+            ImVec4 attrib_color = ToImGui(Color::WHITE);
+            String tooltip;
+            if (style_value.NotNull())
+            {
+                attrib_color = ToImGui(Color::GRAY);
+                if (style_value.GetVariantValue(info.type_) != value)
+                {
+                    attrib_color = ToImGui(Color::GREEN);
+                    tooltip = "Style value was modified";
+                }
+                else
+                    tooltip = "Style value unmodified.";
+            }
+            ui::TextColored(attrib_color, "%s", info.name_.CString());
+            if (!tooltip.Empty() && ui::IsItemHovered())
+                ui::SetTooltip("%s", tooltip.CString());
             ui::NextColumn();
 
-            if (ui::Button(ICON_FA_UNDO))
+            if (ui::Button(ICON_FA_CARET_DOWN))
+                ui::OpenPopup("Attribute Menu");
+
+            if (ui::BeginPopup("Attribute Menu"))
             {
-                _undo.TrackValue(item, info.name_, value);
-                item->SetAttribute(info.name_, info.defaultValue_);
-                item->ApplyAttributes();
-                _undo.TrackValue(item, info.name_, info.defaultValue_);
+                if (ui::MenuItem("Reset to default"))
+                {
+                    _undo.TrackValue(item, info.name_, value);
+                    item->SetAttribute(info.name_, info.defaultValue_);
+                    item->ApplyAttributes();
+                    _undo.TrackValue(item, info.name_, info.defaultValue_);
+                }
+                // TODO: internal element support.
+                if (!_selected->IsInternal())
+                {
+                    if (style_value.NotNull())
+                    {
+                        if (ui::MenuItem("Reset to style"))
+                        {
+                            _undo.TrackValue(item, info.name_, value);
+                            auto set_value = style_value.GetVariantValue(info.type_);
+                            item->SetAttribute(info.name_, set_value);
+                            item->ApplyAttributes();
+                            _undo.TrackValue(item, info.name_, set_value);
+                        }
+                        // TODO: undo/redo for styles.
+                        if (ui::MenuItem("Remove from style"))
+                        {
+                            style_value.GetParent().RemoveChild(style_value);
+                        }
+                    }
+                    if (ui::MenuItem("Save to style"))
+                    {
+                        if (style_value.NotNull())
+                            style_value.SetAttribute("value", value.ToString());
+                        else
+                        {
+                            XPathQuery q("/elements/element[@type=$typeName]", "typeName:String");
+                            q.SetVariable("typeName", applied_style);
+                            auto type_style = _styleXml.SelectSinglePrepared(q);
+                            auto new_attribute = type_style.CreateChild("attribute");
+                            new_attribute.SetAttribute("name", info.name_);
+                            new_attribute.SetValue(value.ToString());
+                        }
+                    }
+                }
+
+                ImGui::EndPopup();
             }
-            if (ui::IsItemActive())
-                ui::SetTooltip("Set default value.");
             ui::SameLine();
 
             if (combo_values)
