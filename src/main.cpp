@@ -62,13 +62,15 @@ public:
     HashMap<String, std::array<char, 0x1000>> _buffers;
     UndoManager _undo;
     String _current_file_path;
+    String _current_style_file_path;
     bool _is_editing_value = false;
     bool _show_internal = false;
     bool _clear_buffers = true;
     ResizeType _resizing = RESIZE_NONE;
     std::array<char, 0x100> _filter;
-    XMLElement _styleXml;
-    Vector<String> _styleNames;
+    SharedPtr<XMLFile> _style_file;
+    Vector<String> _style_names;
+    Vector<String> _style_hierarchy;
 
     explicit UIEditorApplication(Context* ctx) : Application(ctx), _undo(ctx)
     {
@@ -243,20 +245,33 @@ public:
                         LoadFile(filename);
                 }
 
-                if (ui::MenuItem(ICON_FA_FLOPPY_O " Save As") && _ui->GetRoot()->GetNumChildren() > 0)
+                if (ui::MenuItem(ICON_FA_FLOPPY_O " Save UI As") && _ui->GetRoot()->GetNumChildren() > 0)
                 {
                     const char* filters[] = {"*.xml"};
-                    if (auto path = tinyfd_saveFileDialog("Save file", ".", 1, filters, "XML files"))
-                        SaveFile(path);
+                    if (auto path = tinyfd_saveFileDialog("Save UI file", ".", 1, filters, "XML files"))
+                        SaveFileUI(path);
+                }
+
+                if (ui::MenuItem(ICON_FA_FLOPPY_O " Save Style As") && _style_file.NotNull())
+                {
+                    const char* filters[] = {"*.xml"};
+                    if (auto path = tinyfd_saveFileDialog("Save Style file", ".", 1, filters, "XML files"))
+                        SaveFileStyle(path);
                 }
 
                 ui::EndMenu();
             }
 
-            if (ui::Button(ICON_FA_FLOPPY_O) && !_current_file_path.Empty())
-                SaveFile(_current_file_path);
+            if (ui::Button(ICON_FA_FLOPPY_O))
+            {
+                if (!_current_file_path.Empty())
+                    SaveFileUI(_current_file_path);
+                if (!_current_style_file_path.Empty())
+                    SaveFileStyle(_current_style_file_path);
+            }
+
             if (ui::IsItemHovered())
-                ui::SetTooltip("Save current file.");
+                ui::SetTooltip("Save current UI and style files.");
             ui::SameLine();
 
             if (ui::Button(ICON_FA_UNDO))
@@ -315,7 +330,11 @@ public:
         auto input = context_->GetInput();
         if (input->GetMouseButtonPress(MOUSEB_LEFT) || input->GetMouseButtonPress(MOUSEB_RIGHT))
         {
-            auto clicked = _ui->GetElementAt(input->GetMousePosition(), false);
+            auto pos = input->GetMousePosition();
+            auto clicked = _ui->GetElementAt(pos, false);
+            if (!clicked && _ui->GetRoot()->GetCombinedScreenRect().IsInside(pos) == INSIDE)
+                clicked = _ui->GetRoot();
+
             if (clicked)
                 SelectItem(clicked);
         }
@@ -339,11 +358,31 @@ public:
                     };
                     for (auto i = 0; ui_types[i] != 0; i++)
                     {
-                        if (ui::MenuItem(ui_types[i]))
+                        // TODO: element creation with custom styles more usable.
+                        if (input->GetKeyDown(KEY_SHIFT))
                         {
-                            SelectItem(_selected->CreateChild(ui_types[i]));
-                            _selected->SetStyleAuto();
-                            _undo.TrackAddition(_selected);
+                            if (ui::BeginMenu(ui_types[i]))
+                            {
+                                for (auto j = 0; j < _style_names.Size(); j++)
+                                {
+                                    if (ui::MenuItem(_style_names[j].CString()))
+                                    {
+                                        SelectItem(_selected->CreateChild(ui_types[i]));
+                                        _selected->SetStyle(_style_names[j]);
+                                        _undo.TrackAddition(_selected);
+                                    }
+                                }
+                                ui::EndMenu();
+                            }
+                        }
+                        else
+                        {
+                            if (ui::MenuItem(ui_types[i]))
+                            {
+                                SelectItem(_selected->CreateChild(ui_types[i]));
+                                _selected->SetStyleAuto();
+                                _undo.TrackAddition(_selected);
+                            }
                         }
                     }
                     ui::EndMenu();
@@ -417,16 +456,17 @@ public:
                 {
                     // This is a style.
                     _ui->GetRoot()->SetDefaultStyle(xml);
-                    _styleXml = xml->GetRoot();
+                    _style_file = xml;
+                    _current_style_file_path = file_path;
 
-                    auto styles = _styleXml.SelectPrepared(XPathQuery("/elements/element"));
+                    auto styles = _style_file->GetRoot().SelectPrepared(XPathQuery("/elements/element"));
                     for (auto i = 0; i < styles.Size(); i++)
                     {
                         auto type = styles[i].GetAttribute("type");
-                        if (type.Length() && !_styleNames.Contains(type))
-                            _styleNames.Push(type);
+                        if (type.Length() && !_style_names.Contains(type))
+                            _style_names.Push(type);
                     }
-                    Sort(_styleNames.Begin(), _styleNames.End());
+                    Sort(_style_names.Begin(), _style_names.End());
                     return true;
                 }
                 else if (xml->GetRoot().GetName() == "element")
@@ -436,7 +476,8 @@ public:
                     if (child->LoadXML(xml->GetRoot()))
                     {
                         child->SetStyleAuto();
-                        SetCurrentFilePath(file_path);
+                        _current_file_path = file_path;
+                        UpdateWindowTitle();
 
                         for (auto old_child : children)
                             old_child->Remove();
@@ -454,20 +495,36 @@ public:
         return false;
     }
 
-    bool SaveFile(const String& file_path)
+    bool SaveFileUI(const String& file_path)
     {
         File saveFile(context_, file_path, FILE_WRITE);
         if (file_path.EndsWith(".xml", false))
         {
             if (_ui->GetRoot()->GetChild(0)->SaveXML(saveFile))
             {
-                SetCurrentFilePath(file_path);
+                _current_file_path = file_path;
+                UpdateWindowTitle();
                 return true;
             }
         }
 
         tinyfd_messageBox("Error", "Saving UI file failed", "ok", "error", 1);
-        return true;
+        return false;
+    }
+
+    bool SaveFileStyle(const String& file_path)
+    {
+        if (_style_file.NotNull())
+        {
+            _current_style_file_path = file_path;
+            if (file_path.EndsWith(".xml", false))
+            {
+                if (_style_file->SaveFile(file_path))
+                    return true;
+            }
+        }
+        tinyfd_messageBox("Error", "Saving Style file failed", "ok", "error", 1);
+        return false;
     }
 
     void RenderUITree(UIElement* element)
@@ -502,6 +559,17 @@ public:
         }
     }
 
+    String GetAppliedStyle()
+    {
+        if (_selected.Null())
+            return "";
+
+        auto applied_style = _selected->GetAppliedStyle();
+        if (applied_style.Empty())
+            applied_style = _selected->GetTypeName();
+        return applied_style;
+    }
+
     void RenderAttributes(Serializable* item)
     {
         ui::Columns(2);
@@ -521,22 +589,8 @@ public:
         ui::TextUnformatted("Style");
         ui::NextColumn();
 
-        auto applied_style = _selected->GetAppliedStyle();
-        if (applied_style.Empty())
-            applied_style = _selected->GetTypeName();
-
-        PODVector<const char*> combos;
-        combos.Reserve(_styleNames.Size() + 1);
-        int current_style_index = 0;
-        combos.Push("none");
-        for (auto i = 0; i < _styleNames.Size(); i++)
-        {
-            combos.Push(_styleNames[i].CString());
-            if (_styleNames[i] == applied_style)
-                current_style_index = i + 1;
-        }
-        if (ui::Combo("", &current_style_index, &combos.Front(), combos.Size()))
-            _selected->SetStyle(combos[current_style_index]);
+        auto type_style = GetAppliedStyle();
+        ui::TextUnformatted(type_style.CString());
 
         if (ui::IsItemHovered())
             ui::SetTooltip(ICON_FA_EXCLAMATION_TRIANGLE " This is a destructive operation. Changing style overwrites element attributes! " ICON_FA_EXCLAMATION_TRIANGLE);
@@ -638,17 +692,46 @@ public:
             }
 
             ui::PushID(info.name_.CString());
-            const char* from_style = "";
-            XPathQuery q("/elements/element[@type=$typeName]/attribute[@name=$name]", "typeName:String,name:String");
-            q.SetVariable("typeName", applied_style);
-            q.SetVariable("name", info.name_);
-            auto style_value = _styleXml.SelectSinglePrepared(q);
+
+            String applied_style_;
+            XMLElement style_attribute;
+            Variant style_value_variant;
+            String attribute_style = type_style;
+            for (auto& style_name : _style_hierarchy)
+            {
+                XPathQuery q("/elements/element[@type=$typeName]/attribute[@name=$name]",
+                             "typeName:String,name:String");
+                q.SetVariable("typeName", style_name);
+                q.SetVariable("name", info.name_);
+                style_attribute = _style_file->GetRoot().SelectSinglePrepared(q);
+                if (style_attribute.NotNull())
+                {
+                    attribute_style = style_name;
+                    break;
+                }
+            }
+
             ImVec4 attrib_color = ToImGui(Color::WHITE);
             String tooltip;
-            if (style_value.NotNull())
+            if (style_attribute.NotNull())
             {
                 attrib_color = ToImGui(Color::GRAY);
-                if (style_value.GetVariantValue(info.type_) != value)
+
+                if (info.enumNames_)
+                {
+                    for (auto i = 0; info.enumNames_[i]; i++)
+                    {
+                        if (style_attribute.GetVariantValue(VAR_STRING).GetString() == info.enumNames_[i])
+                        {
+                            style_value_variant = i;
+                            break;
+                        }
+                    }
+                }
+                else
+                    style_value_variant = style_attribute.GetVariantValue(info.type_);
+
+                if (style_value_variant != value)
                 {
                     attrib_color = ToImGui(Color::GREEN);
                     tooltip = "Style value was modified";
@@ -676,35 +759,61 @@ public:
                 // TODO: internal element support.
                 if (!_selected->IsInternal())
                 {
-                    if (style_value.NotNull())
+                    if (!style_value_variant.IsEmpty())
                     {
                         if (ui::MenuItem("Reset to style"))
                         {
                             _undo.TrackValue(item, info.name_, value);
-                            auto set_value = style_value.GetVariantValue(info.type_);
-                            item->SetAttribute(info.name_, set_value);
+                            item->SetAttribute(info.name_, style_value_variant);
                             item->ApplyAttributes();
-                            _undo.TrackValue(item, info.name_, set_value);
+                            _undo.TrackValue(item, info.name_, style_value_variant);
                         }
                         // TODO: undo/redo for styles.
                         if (ui::MenuItem("Remove from style"))
-                        {
-                            style_value.GetParent().RemoveChild(style_value);
-                        }
+                            style_attribute.GetParent().RemoveChild(style_attribute);
                     }
-                    if (ui::MenuItem("Save to style"))
+
+                    if (ui::BeginMenu("Save to style"))
                     {
-                        if (style_value.NotNull())
-                            style_value.SetAttribute("value", value.ToString());
-                        else
+                        for (auto& style_name : _style_hierarchy)
                         {
-                            XPathQuery q("/elements/element[@type=$typeName]", "typeName:String");
-                            q.SetVariable("typeName", applied_style);
-                            auto type_style = _styleXml.SelectSinglePrepared(q);
-                            auto new_attribute = type_style.CreateChild("attribute");
-                            new_attribute.SetAttribute("name", info.name_);
-                            new_attribute.SetValue(value.ToString());
+                            if (ui::MenuItem(style_name.CString()))
+                            {
+                                XMLElement attribute;
+                                if (style_attribute.NotNull())
+                                {
+                                    if (attribute_style == style_name)
+                                        attribute = style_attribute;
+                                    else
+                                    {
+                                        style_attribute.GetParent().RemoveChild(style_attribute);
+                                        style_attribute = XMLElement();
+                                    }
+                                }
+
+                                if (style_attribute.IsNull())
+                                {
+                                    XPathQuery q("/elements/element[@type=$typeName]/attribute[@name=$attrName]",
+                                                 "typeName:String,attrName:String");
+                                    q.SetVariable("typeName", style_name);
+                                    q.SetVariable("attrName", info.name_);
+                                    attribute = _style_file->GetRoot().SelectSinglePrepared(q);
+                                    if (attribute.IsNull())
+                                    {
+                                        XPathQuery q("/elements/element[@type=$typeName]", "typeName:String");
+                                        q.SetVariable("typeName", style_name);
+                                        auto type_style_element = _style_file->GetRoot().SelectSinglePrepared(q);
+                                        attribute = type_style_element.CreateChild("attribute");
+                                        attribute.SetAttribute("name", info.name_);
+                                    }
+                                }
+
+                                // TODO: undo
+                                attribute.SetAttribute("value", value.ToString());
+                            }
                         }
+
+                        ui::EndMenu();
                     }
                 }
 
@@ -970,10 +1079,20 @@ public:
         ui::Columns(1);
     }
 
-    void SetCurrentFilePath(const String& file_path)
+    String GetBaseName(const String& full_path)
     {
-        _current_file_path = file_path;
-        context_->GetGraphics()->SetWindowTitle("UrhoUIEditor - " + _current_file_path);
+        auto parts = full_path.Split('/');
+        return parts.At(parts.Size() - 1);
+    }
+
+    void UpdateWindowTitle()
+    {
+        String window_name = "UrhoUIEditor";
+        if (!_current_file_path.Empty())
+            window_name += " - " + GetBaseName(_current_file_path);
+        if (!_current_style_file_path.Empty())
+            window_name += " - " + GetBaseName(_current_style_file_path);
+        context_->GetGraphics()->SetWindowTitle(window_name);
     }
 
     void SelectItem(UIElement* current)
@@ -983,6 +1102,17 @@ public:
 
         _buffers.Clear();
         _selected = current;
+
+        _style_hierarchy.Clear();
+        auto style_name = GetAppliedStyle();
+        while (!style_name.Empty())
+        {
+            _style_hierarchy.Push(style_name);
+            XPathQuery query("/elements/element[@type=$type]", "type:String");
+            query.SetVariable("type", style_name);
+            auto style = _style_file->GetRoot().SelectSinglePrepared(query);
+            style_name = style.GetAttribute("style");
+        }
     }
 
     std::array<char, 0x1000>& GetBuffer(const String& name, const String& default_value)
