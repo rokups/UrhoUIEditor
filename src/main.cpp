@@ -168,21 +168,24 @@ public:
 
         bool was_not_moving = _resizing == RESIZE_NONE;
 
-        if (RenderHandle(pos) && was_not_moving)
+        bool can_resize_horizontal = _selected->GetMinSize().x_ != _selected->GetMaxSize().x_;
+        bool can_resize_vertical = _selected->GetMinSize().y_ != _selected->GetMaxSize().y_;
+
+        if (can_resize_horizontal && can_resize_vertical && RenderHandle(pos) && was_not_moving)
             _resizing = RESIZE_LEFT | RESIZE_TOP;
-        if (RenderHandle(pos + IntVector2(0, size.y_ / 2)) && was_not_moving)
+        if (can_resize_horizontal && RenderHandle(pos + IntVector2(0, size.y_ / 2)) && was_not_moving)
             _resizing = RESIZE_LEFT;
-        if (RenderHandle(pos + IntVector2(0, size.y_)) && was_not_moving)
+        if (can_resize_horizontal && can_resize_vertical && RenderHandle(pos + IntVector2(0, size.y_)) && was_not_moving)
             _resizing = RESIZE_LEFT | RESIZE_BOTTOM;
-        if (RenderHandle(pos + IntVector2(size.x_ / 2, 0)) && was_not_moving)
+        if (can_resize_vertical && RenderHandle(pos + IntVector2(size.x_ / 2, 0)) && was_not_moving)
             _resizing = RESIZE_TOP;
-        if (RenderHandle(pos + IntVector2(size.x_, 0)) && was_not_moving)
+        if (can_resize_horizontal && can_resize_vertical && RenderHandle(pos + IntVector2(size.x_, 0)) && was_not_moving)
             _resizing = RESIZE_TOP | RESIZE_RIGHT;
-        if (RenderHandle(pos + IntVector2(size.x_, size.y_ / 2)) && was_not_moving)
+        if (can_resize_horizontal && RenderHandle(pos + IntVector2(size.x_, size.y_ / 2)) && was_not_moving)
             _resizing = RESIZE_RIGHT;
-        if (RenderHandle(pos + IntVector2(size.x_, size.y_)) && was_not_moving)
+        if (can_resize_horizontal && can_resize_vertical && RenderHandle(pos + IntVector2(size.x_, size.y_)) && was_not_moving)
             _resizing = RESIZE_BOTTOM | RESIZE_RIGHT;
-        if (RenderHandle(pos + IntVector2(size.x_ / 2, size.y_)) && was_not_moving)
+        if (can_resize_vertical && RenderHandle(pos + IntVector2(size.x_ / 2, size.y_)) && was_not_moving)
             _resizing = RESIZE_BOTTOM;
         if (RenderHandle(pos + size / 2) && was_not_moving)
             _resizing = RESIZE_MOVE;
@@ -621,74 +624,10 @@ public:
 
             const char** combo_values = 0;
             auto combo_values_num = 0;
-
-            if (info.name_ == "Text Alignment")
+            if (info.enumNames_)
             {
-                static const char* values[] = {"Left", "Center", "Right"};
-                combo_values = values;
-                combo_values_num = SDL_arraysize(values);
-            }
-            else if (info.name_ == "Text Effect")
-            {
-                static const char* values[] = {"None", "Shadow", "Stroke"};
-                combo_values = values;
-                combo_values_num = SDL_arraysize(values);
-            }
-            else if (info.name_ == "Collision Event Mode")
-            {
-                static const char* values[] = {"Never", "Active", "Always"};
-                combo_values = values;
-                combo_values_num = SDL_arraysize(values);
-            }
-            else if (info.name_ == "Focus Mode")
-            {
-                static const char* values[] = {"Not focusable", "Reset focus", "Focusable", "Focusable/Defocusable"};
-                combo_values = values;
-                combo_values_num = SDL_arraysize(values);
-            }
-            else if (info.name_ == "Drag And Drop Mode")
-            {
-                static const char* values[] = {"Disabled", "Source", "Target", "Source/Target"};
-                combo_values = values;
-                combo_values_num = SDL_arraysize(values);
-            }
-            else if (info.name_ == "Layout Mode")
-            {
-                static const char* values[] = {"Free", "Horizontal", "Vertical"};
-                combo_values = values;
-                combo_values_num = SDL_arraysize(values);
-            }
-            else if (info.name_ == "Blend Mode")
-            {
-                static const char* values[] = {"Replace", "Add", "Multiply", "Alpha", "AddAlpha",
-                                               "PremulAlpha", "InvDestAlpha", "Subtract", "SubtractAlpha"};
-                combo_values = values;
-                combo_values_num = SDL_arraysize(values);
-            }
-            else if (info.name_ == "Loop Mode")
-            {
-                static const char* values[] = {"Default", "Force Lopped", "Force Clamped"};
-                combo_values = values;
-                combo_values_num = SDL_arraysize(values);
-            }
-            else if (info.name_ == "Face Camera Mode")
-            {
-                static const char* values[] = {"None", "Rotate XYZ", "Rotate Y", "Lookat XYZ", "Lookat Y",
-                                               "Direction"};
-                combo_values = values;
-                combo_values_num = SDL_arraysize(values);
-            }
-            else if (info.name_ == "Horiz Alignment")
-            {
-                static const char* values[] = {"Left", "Center", "Right"};
-                combo_values = values;
-                combo_values_num = SDL_arraysize(values);
-            }
-            else if (info.name_ == "Vert Alignment")
-            {
-                static const char* values[] = {"Top", "Center", "Bottom"};
-                combo_values = values;
-                combo_values_num = SDL_arraysize(values);
+                combo_values = info.enumNames_;
+                for (; combo_values[++combo_values_num];);
             }
 
             ui::PushID(info.name_.CString());
