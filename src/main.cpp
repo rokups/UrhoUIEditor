@@ -50,6 +50,12 @@ inline ImVec4 ToImGui(const Color& color)
     return ImVec4(color.r_, color.g_, color.b_, color.a_);
 }
 
+
+inline unsigned MakeHash(const ResizeType& value)
+{
+    return value;
+}
+
 class UIEditorApplication : public Application
 {
     ATOMIC_OBJECT(UIEditorApplication, Application);
@@ -70,6 +76,8 @@ public:
     std::array<char, 0x100> _filter;
     SharedPtr<XMLFile> _style_file;
     Vector<String> _style_names;
+    HashMap<ResizeType, SDL_Cursor*> cursors;
+    SDL_Cursor* cursor_arrow;
 
     explicit UIEditorApplication(Context* ctx)
         : Application(ctx)
@@ -91,6 +99,13 @@ public:
 
     void Start() override
     {
+        cursors[RESIZE_MOVE] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEALL);
+        cursors[RESIZE_LEFT] = cursors[RESIZE_RIGHT] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEWE);
+        cursors[RESIZE_BOTTOM] = cursors[RESIZE_TOP] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZENS);
+        cursors[RESIZE_TOP | RESIZE_LEFT] = cursors[RESIZE_BOTTOM | RESIZE_RIGHT] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZENWSE);
+        cursors[RESIZE_TOP | RESIZE_RIGHT] = cursors[RESIZE_BOTTOM | RESIZE_LEFT] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZENESW);
+        cursor_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
+
         context_->RegisterFactory<UrhoUI::UI>();
         context_->RegisterSubsystem(context_->CreateObject<UrhoUI::UI>());
         _ui = GetSubsystem<UrhoUI::UI>();
@@ -137,7 +152,7 @@ public:
 
     bool RenderHandle(IntVector2 pos)
     {
-        auto wh = 10;
+        auto wh = 8;
         IntRect rect(
             pos.x_ - wh / 2,
             pos.y_ - wh / 2,
@@ -153,9 +168,7 @@ public:
         _debug->AddTriangle(a, c, d, Color::RED, false);
 
         auto input = context_->GetInput();
-        if (input->GetMouseButtonDown(MOUSEB_LEFT))
-            return rect.IsInside(input->GetMousePosition()) == INSIDE;
-        return false;
+        return rect.IsInside(input->GetMousePosition()) == INSIDE;
     }
 
     void OnUpdate(VariantMap& args)
@@ -172,37 +185,52 @@ public:
         bool can_resize_horizontal = _selected->GetMinSize().x_ != _selected->GetMaxSize().x_;
         bool can_resize_vertical = _selected->GetMinSize().y_ != _selected->GetMaxSize().y_;
 
-        if (can_resize_horizontal && can_resize_vertical && RenderHandle(pos) && was_not_moving)
-            _resizing = RESIZE_LEFT | RESIZE_TOP;
-        if (can_resize_horizontal && RenderHandle(pos + IntVector2(0, size.y_ / 2)) && was_not_moving)
-            _resizing = RESIZE_LEFT;
-        if (can_resize_horizontal && can_resize_vertical && RenderHandle(pos + IntVector2(0, size.y_)) && was_not_moving)
-            _resizing = RESIZE_LEFT | RESIZE_BOTTOM;
-        if (can_resize_vertical && RenderHandle(pos + IntVector2(size.x_ / 2, 0)) && was_not_moving)
-            _resizing = RESIZE_TOP;
-        if (can_resize_horizontal && can_resize_vertical && RenderHandle(pos + IntVector2(size.x_, 0)) && was_not_moving)
-            _resizing = RESIZE_TOP | RESIZE_RIGHT;
-        if (can_resize_horizontal && RenderHandle(pos + IntVector2(size.x_, size.y_ / 2)) && was_not_moving)
-            _resizing = RESIZE_RIGHT;
-        if (can_resize_horizontal && can_resize_vertical && RenderHandle(pos + IntVector2(size.x_, size.y_)) && was_not_moving)
-            _resizing = RESIZE_BOTTOM | RESIZE_RIGHT;
-        if (can_resize_vertical && RenderHandle(pos + IntVector2(size.x_ / 2, size.y_)) && was_not_moving)
-            _resizing = RESIZE_BOTTOM;
-        if (RenderHandle(pos + size / 2) && was_not_moving)
-            _resizing = RESIZE_MOVE;
+        ResizeType resizing = RESIZE_NONE;
+        if (RenderHandle(pos + size / 2))
+            resizing = RESIZE_MOVE;
+        if (can_resize_horizontal && can_resize_vertical && RenderHandle(pos))
+            resizing = RESIZE_LEFT | RESIZE_TOP;
+        if (can_resize_horizontal && RenderHandle(pos + IntVector2(0, size.y_ / 2)))
+            resizing = RESIZE_LEFT;
+        if (can_resize_horizontal && can_resize_vertical && RenderHandle(pos + IntVector2(0, size.y_)))
+            resizing = RESIZE_LEFT | RESIZE_BOTTOM;
+        if (can_resize_vertical && RenderHandle(pos + IntVector2(size.x_ / 2, 0)))
+            resizing = RESIZE_TOP;
+        if (can_resize_horizontal && can_resize_vertical && RenderHandle(pos + IntVector2(size.x_, 0)))
+            resizing = RESIZE_TOP | RESIZE_RIGHT;
+        if (can_resize_horizontal && RenderHandle(pos + IntVector2(size.x_, size.y_ / 2)))
+            resizing = RESIZE_RIGHT;
+        if (can_resize_horizontal && can_resize_vertical && RenderHandle(pos + IntVector2(size.x_, size.y_)))
+            resizing = RESIZE_BOTTOM | RESIZE_RIGHT;
+        if (can_resize_vertical && RenderHandle(pos + IntVector2(size.x_ / 2, size.y_)))
+            resizing = RESIZE_BOTTOM;
 
-        if (was_not_moving && _resizing != RESIZE_NONE)
-            _undo.TrackValue(_selected, {{"Position", _selected->GetPosition()}, {"Size", _selected->GetSize()}});
+        if (resizing == RESIZE_NONE)
+            SDL_SetCursor(cursor_arrow);
+        else
+            SDL_SetCursor(cursors[resizing]);
 
-        if (_resizing != RESIZE_NONE && !input->GetMouseButtonDown(MOUSEB_LEFT))
+        if (input->GetMouseButtonDown(MOUSEB_LEFT))
         {
-            _undo.TrackValue(_selected, {{"Position", _selected->GetPosition()}, {"Size", _selected->GetSize()}});
-            _resizing = RESIZE_NONE;
+            // Start resizing only when resize is not in progress.
+            if (was_not_moving)
+                _resizing = resizing;
         }
+        else
+            _resizing = RESIZE_NONE;
 
         auto d = input->GetMouseMove();
-        if (_resizing != RESIZE_NONE && d != IntVector2::ZERO)
+        if (_resizing != RESIZE_NONE)
         {
+            if (was_not_moving)
+                _undo.TrackValue(_selected, {{"Position", _selected->GetPosition()}, {"Size", _selected->GetSize()}});
+
+            if (!input->GetMouseButtonDown(MOUSEB_LEFT))
+            {
+                _undo.TrackValue(_selected, {{"Position", _selected->GetPosition()}, {"Size", _selected->GetSize()}});
+                _resizing = RESIZE_NONE;
+            }
+
             pos = _selected->GetPosition();
             if (_resizing & RESIZE_MOVE)
                 pos += d;
@@ -333,7 +361,7 @@ public:
         _ui->GetRoot()->SetPosition(root_pos);
 
         auto input = context_->GetInput();
-        if (input->GetMouseButtonPress(MOUSEB_LEFT) || input->GetMouseButtonPress(MOUSEB_RIGHT))
+        if (_resizing == RESIZE_NONE && input->GetMouseButtonPress(MOUSEB_LEFT) || input->GetMouseButtonPress(MOUSEB_RIGHT))
         {
             auto pos = input->GetMousePosition();
             auto clicked = _ui->GetElementAt(pos, false);
