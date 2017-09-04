@@ -70,9 +70,10 @@ public:
     std::array<char, 0x100> _filter;
     SharedPtr<XMLFile> _style_file;
     Vector<String> _style_names;
-    Vector<String> _style_hierarchy;
 
-    explicit UIEditorApplication(Context* ctx) : Application(ctx), _undo(ctx)
+    explicit UIEditorApplication(Context* ctx)
+        : Application(ctx)
+        , _undo(ctx)
     {
     }
 
@@ -240,9 +241,12 @@ public:
         {
             if (ui::BeginMenu("File"))
             {
+                if (ui::MenuItem(ICON_FA_FILE_TEXT " New"))
+                    _ui->GetRoot()->RemoveAllChildren();
+
+                const char* filters[] = {"*.xml"};
                 if (ui::MenuItem(ICON_FA_FOLDER_OPEN " Open"))
                 {
-                    const char* filters[] = {"*.xml"};
                     auto filename = tinyfd_openFileDialog("Open file", ".", 2, filters, "XML files", 0);
                     if (filename)
                         LoadFile(filename);
@@ -250,14 +254,12 @@ public:
 
                 if (ui::MenuItem(ICON_FA_FLOPPY_O " Save UI As") && _ui->GetRoot()->GetNumChildren() > 0)
                 {
-                    const char* filters[] = {"*.xml"};
                     if (auto path = tinyfd_saveFileDialog("Save UI file", ".", 1, filters, "XML files"))
                         SaveFileUI(path);
                 }
 
                 if (ui::MenuItem(ICON_FA_FLOPPY_O " Save Style As") && _style_file.NotNull())
                 {
-                    const char* filters[] = {"*.xml"};
                     if (auto path = tinyfd_saveFileDialog("Save Style file", ".", 1, filters, "XML files"))
                         SaveFileStyle(path);
                 }
@@ -269,7 +271,7 @@ public:
             {
                 if (!_current_file_path.Empty())
                     SaveFileUI(_current_file_path);
-                if (!_current_style_file_path.Empty())
+                if (!_style_file.Null())
                     SaveFileStyle(_current_style_file_path);
             }
 
@@ -470,6 +472,7 @@ public:
                             _style_names.Push(type);
                     }
                     Sort(_style_names.Begin(), _style_names.End());
+                    UpdateWindowTitle();
                     return true;
                 }
                 else if (xml->GetRoot().GetName() == "element")
@@ -500,11 +503,19 @@ public:
 
     bool SaveFileUI(const String& file_path)
     {
-        File saveFile(context_, file_path, FILE_WRITE);
         if (file_path.EndsWith(".xml", false))
         {
-            if (_ui->GetRoot()->GetChild(0)->SaveXML(saveFile))
+            XMLFile xml(context_);
+            XMLElement root = xml.CreateRoot("element");
+            if (_ui->GetRoot()->GetChild(0)->SaveXML(root))
             {
+                auto result = root.SelectPrepared(XPathQuery("//element[@internal=\"true\"]"));
+                for (auto el = result.FirstResult(); el.NotNull(); el = el.NextResult())
+                    el.GetParent().RemoveChild(el);
+
+                File saveFile(context_, file_path, FILE_WRITE);
+                xml.Save(saveFile);
+
                 _current_file_path = file_path;
                 UpdateWindowTitle();
                 return true;
@@ -517,16 +528,17 @@ public:
 
     bool SaveFileStyle(const String& file_path)
     {
-        if (_style_file.NotNull())
+        if (file_path.EndsWith(".xml", false) && _style_file.NotNull())
         {
+            File saveFile(context_, file_path, FILE_WRITE);
+            _style_file->Save(saveFile);
+
             _current_style_file_path = file_path;
-            if (file_path.EndsWith(".xml", false))
-            {
-                if (_style_file->SaveFile(file_path))
-                    return true;
-            }
+            UpdateWindowTitle();
+            return true;
         }
-        tinyfd_messageBox("Error", "Saving Style file failed", "ok", "error", 1);
+
+        tinyfd_messageBox("Error", "Saving UI file failed", "ok", "error", 1);
         return false;
     }
 
@@ -562,9 +574,12 @@ public:
         }
     }
 
-    String GetAppliedStyle()
+    String GetAppliedStyle(UIElement* element = nullptr)
     {
-        if (_selected.Null())
+        if (element == nullptr)
+            element = _selected;
+
+        if (element == nullptr)
             return "";
 
         auto applied_style = _selected->GetAppliedStyle();
@@ -594,9 +609,6 @@ public:
 
         auto type_style = GetAppliedStyle();
         ui::TextUnformatted(type_style.CString());
-
-        if (ui::IsItemHovered())
-            ui::SetTooltip(ICON_FA_EXCLAMATION_TRIANGLE " This is a destructive operation. Changing style overwrites element attributes! " ICON_FA_EXCLAMATION_TRIANGLE);
 
         ui::NextColumn();
 
@@ -632,55 +644,21 @@ public:
 
             ui::PushID(info.name_.CString());
 
-            String applied_style_;
             XMLElement style_attribute;
-            Variant style_value_variant;
-            String attribute_style = type_style;
-            for (auto& style_name : _style_hierarchy)
+            XMLElement style_xml;
+            Variant style_variant;
+            GetStyleData(info, style_xml, style_attribute, style_variant);
+
+            ImVec4 color = ToImGui(Color::WHITE);
+            if (!style_variant.IsEmpty())
             {
-                XPathQuery q("/elements/element[@type=$typeName]/attribute[@name=$name]",
-                             "typeName:String,name:String");
-                q.SetVariable("typeName", style_name);
-                q.SetVariable("name", info.name_);
-                style_attribute = _style_file->GetRoot().SelectSinglePrepared(q);
-                if (style_attribute.NotNull())
-                {
-                    attribute_style = style_name;
-                    break;
-                }
+                if (style_variant == value)
+                    color = ToImGui(Color::GRAY);
+                else
+                    color = ToImGui(Color::GREEN);
             }
 
-            ImVec4 attrib_color = ToImGui(Color::WHITE);
-            String tooltip;
-            if (style_attribute.NotNull())
-            {
-                attrib_color = ToImGui(Color::GRAY);
-
-                if (info.enumNames_)
-                {
-                    for (auto i = 0; info.enumNames_[i]; i++)
-                    {
-                        if (style_attribute.GetVariantValue(VAR_STRING).GetString() == info.enumNames_[i])
-                        {
-                            style_value_variant = i;
-                            break;
-                        }
-                    }
-                }
-                else
-                    style_value_variant = style_attribute.GetVariantValue(info.type_);
-
-                if (style_value_variant != value)
-                {
-                    attrib_color = ToImGui(Color::GREEN);
-                    tooltip = "Style value was modified";
-                }
-                else
-                    tooltip = "Style value unmodified.";
-            }
-            ui::TextColored(attrib_color, "%s", info.name_.CString());
-            if (!tooltip.Empty() && ui::IsItemHovered())
-                ui::SetTooltip("%s", tooltip.CString());
+            ui::TextColored(color, "%s", info.name_.CString());
             ui::NextColumn();
 
             if (ui::Button(ICON_FA_CARET_DOWN))
@@ -695,65 +673,38 @@ public:
                     item->ApplyAttributes();
                     _undo.TrackValue(item, info.name_, info.defaultValue_);
                 }
-                // TODO: internal element support.
-                if (!_selected->IsInternal())
+
+                if (style_variant != value)
                 {
-                    if (!style_value_variant.IsEmpty())
+                    if (!style_variant.IsEmpty())
                     {
                         if (ui::MenuItem("Reset to style"))
                         {
                             _undo.TrackValue(item, info.name_, value);
-                            item->SetAttribute(info.name_, style_value_variant);
+                            item->SetAttribute(info.name_, style_variant);
                             item->ApplyAttributes();
-                            _undo.TrackValue(item, info.name_, style_value_variant);
+                            _undo.TrackValue(item, info.name_, style_variant);
                         }
-                        // TODO: undo/redo for styles.
-                        if (ui::MenuItem("Remove from style"))
-                            style_attribute.GetParent().RemoveChild(style_attribute);
                     }
 
-                    if (ui::BeginMenu("Save to style"))
+                    if (style_xml.NotNull())
                     {
-                        for (auto& style_name : _style_hierarchy)
+                        if (ui::MenuItem("Save to style"))
                         {
-                            if (ui::MenuItem(style_name.CString()))
+                            if (style_attribute.IsNull())
                             {
-                                XMLElement attribute;
-                                if (style_attribute.NotNull())
-                                {
-                                    if (attribute_style == style_name)
-                                        attribute = style_attribute;
-                                    else
-                                    {
-                                        style_attribute.GetParent().RemoveChild(style_attribute);
-                                        style_attribute = XMLElement();
-                                    }
-                                }
-
-                                if (style_attribute.IsNull())
-                                {
-                                    XPathQuery q("/elements/element[@type=$typeName]/attribute[@name=$attrName]",
-                                                 "typeName:String,attrName:String");
-                                    q.SetVariable("typeName", style_name);
-                                    q.SetVariable("attrName", info.name_);
-                                    attribute = _style_file->GetRoot().SelectSinglePrepared(q);
-                                    if (attribute.IsNull())
-                                    {
-                                        XPathQuery q("/elements/element[@type=$typeName]", "typeName:String");
-                                        q.SetVariable("typeName", style_name);
-                                        auto type_style_element = _style_file->GetRoot().SelectSinglePrepared(q);
-                                        attribute = type_style_element.CreateChild("attribute");
-                                        attribute.SetAttribute("name", info.name_);
-                                    }
-                                }
-
-                                // TODO: undo
-                                attribute.SetAttribute("value", value.ToString());
+                                style_attribute = style_xml.CreateChild("attribute");
+                                style_attribute.SetAttribute("name", info.name_);
                             }
+                            style_attribute.SetVariant(value);
                         }
-
-                        ui::EndMenu();
                     }
+                }
+
+                if (style_attribute.NotNull())
+                {
+                    if (ui::MenuItem("Remove from style"))
+                        style_attribute.GetParent().RemoveChild(style_attribute);
                 }
 
                 ImGui::EndPopup();
@@ -1041,17 +992,6 @@ public:
 
         _buffers.Clear();
         _selected = current;
-
-        _style_hierarchy.Clear();
-        auto style_name = GetAppliedStyle();
-        while (!style_name.Empty())
-        {
-            _style_hierarchy.Push(style_name);
-            XPathQuery query("/elements/element[@type=$type]", "type:String");
-            query.SetVariable("type", style_name);
-            auto style = _style_file->GetRoot().SelectSinglePrepared(query);
-            style_name = style.GetAttribute("style");
-        }
     }
 
     std::array<char, 0x1000>& GetBuffer(const String& name, const String& default_value)
@@ -1070,6 +1010,51 @@ public:
     void RemoveBuffer(const String& name)
     {
         _buffers.Erase(name);
+    }
+
+    void GetStyleData(const AttributeInfo& info, XMLElement& style, XMLElement& attribute, Variant& value)
+    {
+        static XPathQuery _xp_attribute("attribute[@name=$name]", "name:String");
+        static XPathQuery _xp_style("/elements/element[@type=$type]", "type:String");
+
+        _xp_attribute.SetVariable("name", info.name_);
+        style = _selected->GetStyleElement();
+        value = Variant();
+
+        if (style.NotNull())
+        {
+            attribute = style.SelectSinglePrepared(_xp_attribute);
+            if (attribute.IsNull())
+            {
+                auto style_name = _selected->GetAppliedStyle();
+                while (!style_name.Empty())
+                {
+                    _xp_style.SetVariable("type", style_name);
+                    style = _style_file->GetRoot().SelectSinglePrepared(_xp_style);
+                    if (style.NotNull())
+                        style_name = style.GetAttribute("Style");
+                    else
+                        return;
+                }
+                attribute = style.SelectSinglePrepared(_xp_attribute);
+            }
+        }
+
+        if (!attribute.IsNull())
+        {
+            value = attribute.GetVariantValue(info.enumNames_ ? VAR_STRING : info.type_);
+            if (info.enumNames_)
+            {
+                for (auto i = 0; info.enumNames_[i]; i++)
+                {
+                    if (value.GetString() == info.enumNames_[i])
+                    {
+                        value = i;
+                        break;
+                    }
+                }
+            }
+        }
     }
 };
 
