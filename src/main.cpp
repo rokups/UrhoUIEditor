@@ -509,9 +509,15 @@ public:
             XMLElement root = xml.CreateRoot("element");
             if (_ui->GetRoot()->GetChild(0)->SaveXML(root))
             {
+                // Remove internal UI elements
                 auto result = root.SelectPrepared(XPathQuery("//element[@internal=\"true\"]"));
                 for (auto el = result.FirstResult(); el.NotNull(); el = el.NextResult())
                     el.GetParent().RemoveChild(el);
+
+                // Remove style="none"
+                root.SelectPrepared(XPathQuery("//element[@style=\"none\"]"));
+                for (auto el = result.FirstResult(); el.NotNull(); el = el.NextResult())
+                    el.RemoveAttribute("style");
 
                 File saveFile(context_, file_path, FILE_WRITE);
                 xml.Save(saveFile);
