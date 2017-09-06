@@ -78,6 +78,7 @@ public:
     Vector<String> _style_names;
     HashMap<ResizeType, SDL_Cursor*> cursors;
     SDL_Cursor* cursor_arrow;
+    bool _hide_resize_handles = false;
 
     explicit UIEditorApplication(Context* ctx)
         : Application(ctx)
@@ -164,8 +165,12 @@ public:
         auto b = ScreenToWorld({rect.right_, rect.top_});
         auto c = ScreenToWorld({rect.right_, rect.bottom_});
         auto d = ScreenToWorld({rect.left_, rect.bottom_});
-        _debug->AddTriangle(a, b, c, Color::RED, false);
-        _debug->AddTriangle(a, c, d, Color::RED, false);
+
+        if (!_hide_resize_handles)
+        {
+            _debug->AddTriangle(a, b, c, Color::RED, false);
+            _debug->AddTriangle(a, c, d, Color::RED, false);
+        }
 
         auto input = context_->GetInput();
         return rect.IsInside(input->GetMousePosition()) == INSIDE;
@@ -261,6 +266,7 @@ public:
     void RenderSystemUI()
     {
         _ui->Render(true);
+        _debug->Render();
 
         if (_selected.NotNull())
             _ui->DebugDraw(_selected);
@@ -326,6 +332,9 @@ public:
             ui::SameLine();
 
             ui::Checkbox("Show Internal", &_show_internal);
+            ui::SameLine();
+
+            ui::Checkbox("Hide Resize Handles", &_hide_resize_handles);
             ui::SameLine();
 
             ui::EndMainMenuBar();
